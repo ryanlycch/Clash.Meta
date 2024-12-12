@@ -2,10 +2,11 @@ package http
 
 import (
 	"net"
-	"time"
 
-	"github.com/Dreamacro/clash/common/cache"
-	C "github.com/Dreamacro/clash/constant"
+	"github.com/metacubex/mihomo/adapter/inbound"
+	"github.com/metacubex/mihomo/component/auth"
+	C "github.com/metacubex/mihomo/constant"
+	authStore "github.com/metacubex/mihomo/listener/auth"
 )
 
 type Listener struct {
@@ -30,19 +31,33 @@ func (l *Listener) Close() error {
 	return l.listener.Close()
 }
 
-func New(addr string, in chan<- C.ConnContext) (*Listener, error) {
-	return NewWithAuthenticate(addr, in, true)
+func New(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
+	return NewWithAuthenticator(addr, tunnel, authStore.Default, additions...)
 }
 
-func NewWithAuthenticate(addr string, in chan<- C.ConnContext, authenticate bool) (*Listener, error) {
-	l, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, err
+// NewWithAuthenticate
+// never change type traits because it's used in CMFA
+func NewWithAuthenticate(addr string, tunnel C.Tunnel, authenticate bool, additions ...inbound.Addition) (*Listener, error) {
+	store := authStore.Default
+	if !authenticate {
+		store = authStore.Default
+	}
+	return NewWithAuthenticator(addr, tunnel, store, additions...)
+}
+
+func NewWithAuthenticator(addr string, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) (*Listener, error) {
+	isDefault := false
+	if len(additions) == 0 {
+		isDefault = true
+		additions = []inbound.Addition{
+			inbound.WithInName("DEFAULT-HTTP"),
+			inbound.WithSpecialRules(""),
+		}
 	}
 
-	var c *cache.Cache[string, bool]
-	if authenticate {
-		c = cache.New[string, bool](time.Second * 30)
+	l, err := inbound.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
 	}
 
 	hl := &Listener{
@@ -58,7 +73,18 @@ func NewWithAuthenticate(addr string, in chan<- C.ConnContext, authenticate bool
 				}
 				continue
 			}
-			go HandleConn(conn, in, c)
+
+			store := store
+			if isDefault || store == authStore.Default { // only apply on default listener
+				if !inbound.IsRemoteAddrDisAllowed(conn.RemoteAddr()) {
+					_ = conn.Close()
+					continue
+				}
+				if inbound.SkipAuthRemoteAddr(conn.RemoteAddr()) {
+					store = authStore.Nil
+				}
+			}
+			go HandleConn(conn, tunnel, store, additions...)
 		}
 	}()
 

@@ -5,14 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Dreamacro/Clash.Meta/adapter/outbound"
-	C "github.com/Dreamacro/Clash.Meta/constant"
-
 	"github.com/docker/docker/api/types/container"
+	"github.com/metacubex/mihomo/adapter/outbound"
+	C "github.com/metacubex/mihomo/constant"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestClash_VlessTLS(t *testing.T) {
+// TODO: fix udp test
+func TestMihomo_VlessTLS(t *testing.T) {
 	cfg := &container.Config{
 		Image:        ImageVmess,
 		ExposedPorts: defaultExposedPorts,
@@ -37,6 +37,7 @@ func TestClash_VlessTLS(t *testing.T) {
 		Server:         localIP.String(),
 		Port:           10002,
 		UUID:           "b831381d-6324-4d53-ad4f-8cda48b30811",
+		TLS:            true,
 		SkipCertVerify: true,
 		ServerName:     "example.org",
 		UDP:            true,
@@ -49,7 +50,8 @@ func TestClash_VlessTLS(t *testing.T) {
 	testSuit(t, proxy)
 }
 
-func TestClash_VlessXTLS(t *testing.T) {
+// TODO: fix udp test
+func TestMihomo_VlessXTLS(t *testing.T) {
 	cfg := &container.Config{
 		Image:        ImageXray,
 		ExposedPorts: defaultExposedPorts,
@@ -74,11 +76,11 @@ func TestClash_VlessXTLS(t *testing.T) {
 		Server:         localIP.String(),
 		Port:           10002,
 		UUID:           "b831381d-6324-4d53-ad4f-8cda48b30811",
+		TLS:            true,
 		SkipCertVerify: true,
 		ServerName:     "example.org",
 		UDP:            true,
 		Flow:           "xtls-rprx-direct",
-		FlowShow:       true,
 	})
 	if err != nil {
 		assert.FailNow(t, err.Error())
@@ -88,7 +90,8 @@ func TestClash_VlessXTLS(t *testing.T) {
 	testSuit(t, proxy)
 }
 
-func TestClash_VlessWS(t *testing.T) {
+// TODO: fix udp test
+func TestMihomo_VlessWS(t *testing.T) {
 	cfg := &container.Config{
 		Image:        ImageVmess,
 		ExposedPorts: defaultExposedPorts,
@@ -113,6 +116,7 @@ func TestClash_VlessWS(t *testing.T) {
 		Server:         localIP.String(),
 		Port:           10002,
 		UUID:           "b831381d-6324-4d53-ad4f-8cda48b30811",
+		TLS:            true,
 		SkipCertVerify: true,
 		ServerName:     "example.org",
 		Network:        "ws",

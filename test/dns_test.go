@@ -6,6 +6,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func exchange(address, domain string, tp uint16) ([]dns.RR, error) {
@@ -20,7 +21,7 @@ func exchange(address, domain string, tp uint16) ([]dns.RR, error) {
 	return r.Answer, nil
 }
 
-func TestClash_DNS(t *testing.T) {
+func TestMihomo_DNS(t *testing.T) {
 	basic := `
 log-level: silent
 dns:
@@ -30,18 +31,15 @@ dns:
     - 119.29.29.29
 `
 
-	if err := parseAndApply(basic); err != nil {
-		assert.FailNow(t, err.Error())
-	}
+	err := parseAndApply(basic)
+	require.NoError(t, err)
 	defer cleanup()
 
 	time.Sleep(waitTime)
 
 	rr, err := exchange("127.0.0.1:8553", "1.1.1.1.nip.io", dns.TypeA)
 	assert.NoError(t, err)
-	if !assert.NotEmpty(t, rr) {
-		assert.FailNow(t, "record empty")
-	}
+	assert.NotEmptyf(t, rr, "record empty")
 
 	record := rr[0].(*dns.A)
 	assert.Equal(t, record.A.String(), "1.1.1.1")
@@ -51,11 +49,11 @@ dns:
 	assert.Empty(t, rr)
 }
 
-func TestClash_DNSHostAndFakeIP(t *testing.T) {
+func TestMihomo_DNSHostAndFakeIP(t *testing.T) {
 	basic := `
 log-level: silent
 hosts:
-  foo.clash.dev: 1.1.1.1
+  foo.mihomo.dev: 1.1.1.1
 dns:
   enable: true
   listen: 0.0.0.0:8553
@@ -68,9 +66,8 @@ dns:
     - 119.29.29.29
 `
 
-	if err := parseAndApply(basic); err != nil {
-		assert.FailNow(t, err.Error())
-	}
+	err := parseAndApply(basic)
+	require.NoError(t, err)
 	defer cleanup()
 
 	time.Sleep(waitTime)
@@ -81,10 +78,10 @@ dns:
 	}
 
 	list := []domainPair{
-		{"foo.org", "198.18.0.2"},
-		{"bar.org", "198.18.0.3"},
-		{"foo.org", "198.18.0.2"},
-		{"foo.clash.dev", "1.1.1.1"},
+		{"foo.org", "198.18.0.4"},
+		{"bar.org", "198.18.0.5"},
+		{"foo.org", "198.18.0.4"},
+		{"foo.mihomo.dev", "1.1.1.1"},
 	}
 
 	for _, pair := range list {

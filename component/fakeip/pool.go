@@ -3,11 +3,12 @@ package fakeip
 import (
 	"errors"
 	"net/netip"
+	"strings"
 	"sync"
 
-	"github.com/Dreamacro/clash/common/nnip"
-	"github.com/Dreamacro/clash/component/profile/cachefile"
-	"github.com/Dreamacro/clash/component/trie"
+	"github.com/metacubex/mihomo/common/nnip"
+	"github.com/metacubex/mihomo/component/profile/cachefile"
+	C "github.com/metacubex/mihomo/constant"
 )
 
 const (
@@ -26,7 +27,7 @@ type store interface {
 	FlushFakeIP() error
 }
 
-// Pool is a implementation about fake ip generator without storage
+// Pool is an implementation about fake ip generator without storage
 type Pool struct {
 	gateway netip.Addr
 	first   netip.Addr
@@ -34,8 +35,9 @@ type Pool struct {
 	offset  netip.Addr
 	cycle   bool
 	mux     sync.Mutex
-	host    *trie.DomainTrie[bool]
-	ipnet   *netip.Prefix
+	host    []C.DomainMatcher
+	mode    C.FilterMode
+	ipnet   netip.Prefix
 	store   store
 }
 
@@ -43,6 +45,9 @@ type Pool struct {
 func (p *Pool) Lookup(host string) netip.Addr {
 	p.mux.Lock()
 	defer p.mux.Unlock()
+
+	// RFC4343: DNS Case Insensitive, we SHOULD return result with all cases.
+	host = strings.ToLower(host)
 	if ip, exist := p.store.GetByHost(host); exist {
 		return ip
 	}
@@ -62,10 +67,20 @@ func (p *Pool) LookBack(ip netip.Addr) (string, bool) {
 
 // ShouldSkipped return if domain should be skipped
 func (p *Pool) ShouldSkipped(domain string) bool {
-	if p.host == nil {
-		return false
+	should := p.shouldSkipped(domain)
+	if p.mode == C.FilterWhiteList {
+		return !should
 	}
-	return p.host.Search(domain) != nil
+	return should
+}
+
+func (p *Pool) shouldSkipped(domain string) bool {
+	for _, matcher := range p.host {
+		if matcher.MatchDomain(domain) {
+			return true
+		}
+	}
+	return false
 }
 
 // Exist returns if given ip exists in fake-ip pool
@@ -87,7 +102,7 @@ func (p *Pool) Broadcast() netip.Addr {
 }
 
 // IPNet return raw ipnet
-func (p *Pool) IPNet() *netip.Prefix {
+func (p *Pool) IPNet() netip.Prefix {
 	return p.ipnet
 }
 
@@ -149,8 +164,9 @@ func (p *Pool) restoreState() {
 }
 
 type Options struct {
-	IPNet *netip.Prefix
-	Host  *trie.DomainTrie[bool]
+	IPNet netip.Prefix
+	Host  []C.DomainMatcher
+	Mode  C.FilterMode
 
 	// Size sets the maximum number of entries in memory
 	// and does not work if Persistence is true
@@ -166,8 +182,8 @@ func New(options Options) (*Pool, error) {
 	var (
 		hostAddr = options.IPNet.Masked().Addr()
 		gateway  = hostAddr.Next()
-		first    = gateway.Next().Next()
-		last     = nnip.UnMasked(*options.IPNet)
+		first    = gateway.Next().Next().Next() // default start with 198.18.0.4
+		last     = nnip.UnMasked(options.IPNet)
 	)
 
 	if !options.IPNet.IsValid() || !first.IsValid() || !first.Less(last) {
@@ -181,12 +197,11 @@ func New(options Options) (*Pool, error) {
 		offset:  first.Prev(),
 		cycle:   false,
 		host:    options.Host,
+		mode:    options.Mode,
 		ipnet:   options.IPNet,
 	}
 	if options.Persistence {
-		pool.store = &cachefileStore{
-			cache: cachefile.Cache(),
-		}
+		pool.store = newCachefileStore(cachefile.Cache())
 	} else {
 		pool.store = newMemoryStore(options.Size)
 	}

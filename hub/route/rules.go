@@ -1,10 +1,10 @@
 package route
 
 import (
-	"github.com/Dreamacro/clash/constant"
+	"github.com/metacubex/mihomo/constant"
 	"net/http"
 
-	"github.com/Dreamacro/clash/tunnel"
+	"github.com/metacubex/mihomo/tunnel"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/render"
@@ -20,7 +20,7 @@ type Rule struct {
 	Type    string `json:"type"`
 	Payload string `json:"payload"`
 	Proxy   string `json:"proxy"`
-	Size    int    `json:"Size"`
+	Size    int    `json:"size"`
 }
 
 func getRules(w http.ResponseWriter, r *http.Request) {
