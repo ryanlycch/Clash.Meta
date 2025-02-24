@@ -3,9 +3,13 @@ package sniffer
 import (
 	"bytes"
 	"errors"
-	C "github.com/Dreamacro/clash/constant"
+	"fmt"
 	"net"
 	"strings"
+
+	"github.com/metacubex/mihomo/common/utils"
+	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/constant/sniffer"
 )
 
 var (
@@ -22,8 +26,21 @@ const (
 )
 
 type HTTPSniffer struct {
+	*BaseSniffer
 	version version
 	host    string
+}
+
+var _ sniffer.Sniffer = (*HTTPSniffer)(nil)
+
+func NewHTTPSniffer(snifferConfig SnifferConfig) (*HTTPSniffer, error) {
+	ports := snifferConfig.Ports
+	if len(ports) == 0 {
+		ports = utils.IntRanges[uint16]{utils.NewRange[uint16](80, 80)}
+	}
+	return &HTTPSniffer{
+		BaseSniffer: NewBaseSniffer(ports, C.TCP),
+	}, nil
 }
 
 func (http *HTTPSniffer) Protocol() string {
@@ -41,7 +58,7 @@ func (http *HTTPSniffer) SupportNetwork() C.NetWork {
 	return C.TCP
 }
 
-func (http *HTTPSniffer) SniffTCP(bytes []byte) (string, error) {
+func (http *HTTPSniffer) SniffData(bytes []byte) (string, error) {
 	domain, err := SniffHTTP(bytes)
 	if err == nil {
 		return *domain, nil
@@ -88,13 +105,32 @@ func SniffHTTP(b []byte) (*string, error) {
 			host, _, err := net.SplitHostPort(rawHost)
 			if err != nil {
 				if addrError, ok := err.(*net.AddrError); ok && strings.Contains(addrError.Err, "missing port") {
-					host = rawHost
+					return parseHost(rawHost)
 				} else {
 					return nil, err
 				}
 			}
+
+			if net.ParseIP(host) != nil {
+				return nil, fmt.Errorf("host is ip")
+			}
+
 			return &host, nil
 		}
 	}
 	return nil, ErrNoClue
+}
+
+func parseHost(host string) (*string, error) {
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		if net.ParseIP(host[1:len(host)-1]) != nil {
+			return nil, fmt.Errorf("host is ip")
+		}
+	}
+
+	if net.ParseIP(host) != nil {
+		return nil, fmt.Errorf("host is ip")
+	}
+
+	return &host, nil
 }

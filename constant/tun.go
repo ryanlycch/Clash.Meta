@@ -7,13 +7,15 @@ import (
 )
 
 var StackTypeMapping = map[string]TUNStack{
-	strings.ToUpper(TunGvisor.String()): TunGvisor,
-	strings.ToUpper(TunSystem.String()): TunSystem,
+	strings.ToLower(TunGvisor.String()): TunGvisor,
+	strings.ToLower(TunSystem.String()): TunSystem,
+	strings.ToLower(TunMixed.String()):  TunMixed,
 }
 
 const (
 	TunGvisor TUNStack = iota
 	TunSystem
+	TunMixed
 )
 
 type TUNStack int
@@ -24,7 +26,7 @@ func (e *TUNStack) UnmarshalYAML(unmarshal func(any) error) error {
 	if err := unmarshal(&tp); err != nil {
 		return err
 	}
-	mode, exist := StackTypeMapping[strings.ToUpper(tp)]
+	mode, exist := StackTypeMapping[strings.ToLower(tp)]
 	if !exist {
 		return errors.New("invalid tun stack")
 	}
@@ -41,7 +43,7 @@ func (e TUNStack) MarshalYAML() (any, error) {
 func (e *TUNStack) UnmarshalJSON(data []byte) error {
 	var tp string
 	json.Unmarshal(data, &tp)
-	mode, exist := StackTypeMapping[strings.ToUpper(tp)]
+	mode, exist := StackTypeMapping[strings.ToLower(tp)]
 	if !exist {
 		return errors.New("invalid tun stack")
 	}
@@ -54,12 +56,29 @@ func (e TUNStack) MarshalJSON() ([]byte, error) {
 	return json.Marshal(e.String())
 }
 
+// UnmarshalText unserialize TUNStack
+func (e *TUNStack) UnmarshalText(data []byte) error {
+	mode, exist := StackTypeMapping[strings.ToLower(string(data))]
+	if !exist {
+		return errors.New("invalid tun stack")
+	}
+	*e = mode
+	return nil
+}
+
+// MarshalText serialize TUNStack with json
+func (e TUNStack) MarshalText() ([]byte, error) {
+	return []byte(e.String()), nil
+}
+
 func (e TUNStack) String() string {
 	switch e {
 	case TunGvisor:
 		return "gVisor"
 	case TunSystem:
 		return "System"
+	case TunMixed:
+		return "Mixed"
 	default:
 		return "unknown"
 	}

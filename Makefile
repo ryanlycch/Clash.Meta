@@ -1,4 +1,4 @@
-NAME=Clash.Meta
+NAME=mihomo
 BINDIR=bin
 BRANCH=$(shell git branch --show-current)
 ifeq ($(BRANCH),Alpha)
@@ -8,22 +8,20 @@ VERSION=beta-$(shell git rev-parse --short HEAD)
 else ifeq ($(BRANCH),)
 VERSION=$(shell git describe --tags)
 else
-VERSION=unknown
+VERSION=$(shell git rev-parse --short HEAD)
 endif
 
 BUILDTIME=$(shell date -u)
-GOBUILD=CGO_ENABLED=0 go build -trimpath -ldflags '-X "github.com/Dreamacro/clash/constant.Version=$(VERSION)" \
-		-X "github.com/Dreamacro/clash/constant.BuildTime=$(BUILDTIME)" \
+GOBUILD=CGO_ENABLED=0 go build -tags with_gvisor -trimpath -ldflags '-X "github.com/metacubex/mihomo/constant.Version=$(VERSION)" \
+		-X "github.com/metacubex/mihomo/constant.BuildTime=$(BUILDTIME)" \
 		-w -s -buildid='
 
 PLATFORM_LIST = \
-	darwin-amd64v1 \
-	darwin-amd64v2 \
-	darwin-amd64v3 \
+	darwin-amd64-compatible \
+	darwin-amd64 \
 	darwin-arm64 \
-	linux-amd64v1 \
-	linux-amd64v2 \
-	linux-amd64v3 \
+	linux-amd64-compatible \
+	linux-amd64 \
 	linux-armv5 \
 	linux-armv6 \
 	linux-armv7 \
@@ -34,6 +32,8 @@ PLATFORM_LIST = \
 	linux-mips-hardfloat \
 	linux-mipsle-softfloat \
 	linux-mipsle-hardfloat \
+	linux-riscv64 \
+	linux-loong64 \
 	android-arm64 \
 	freebsd-386 \
 	freebsd-amd64 \
@@ -41,9 +41,8 @@ PLATFORM_LIST = \
 
 WINDOWS_ARCH_LIST = \
 	windows-386 \
-	windows-amd64v1 \
-	windows-amd64v2 \
-	windows-amd64v3 \
+	windows-amd64-compatible \
+	windows-amd64 \
 	windows-arm64 \
     windows-arm32v7
 
@@ -51,16 +50,16 @@ all:linux-amd64 linux-arm64\
 	darwin-amd64 darwin-arm64\
  	windows-amd64 windows-arm64\
 
-docker:
-	GOAMD64=v3 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
-darwin-amd64v3:
+darwin-all: darwin-amd64 darwin-arm64
+
+docker:
+	GOAMD64=v1 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
+
+darwin-amd64:
 	GOARCH=amd64 GOOS=darwin GOAMD64=v3 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
-darwin-amd64v2:
-	GOARCH=amd64 GOOS=darwin GOAMD64=v2 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
-
-darwin-amd64v1:
+darwin-amd64-compatible:
 	GOARCH=amd64 GOOS=darwin GOAMD64=v1 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
 darwin-arm64:
@@ -69,13 +68,10 @@ darwin-arm64:
 linux-386:
 	GOARCH=386 GOOS=linux $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
-linux-amd64v3:
+linux-amd64:
 	GOARCH=amd64 GOOS=linux GOAMD64=v3 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
-linux-amd64v2:
-	GOARCH=amd64 GOOS=linux GOAMD64=v2 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
-
-linux-amd64v1:
+linux-amd64-compatible:
 	GOARCH=amd64 GOOS=linux GOAMD64=v1 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
 linux-arm64:
@@ -108,6 +104,12 @@ linux-mips64:
 linux-mips64le:
 	GOARCH=mips64le GOOS=linux $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
+linux-riscv64:
+	GOARCH=riscv64 GOOS=linux $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
+	
+linux-loong64:
+	GOARCH=loong64 GOOS=linux $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
+
 android-arm64:
 	GOARCH=arm64 GOOS=android $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
@@ -123,13 +125,10 @@ freebsd-arm64:
 windows-386:
 	GOARCH=386 GOOS=windows $(GOBUILD) -o $(BINDIR)/$(NAME)-$@.exe
 
-windows-amd64v3:
+windows-amd64:
 	GOARCH=amd64 GOOS=windows GOAMD64=v3 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@.exe
 
-windows-amd64v2:
-	GOARCH=amd64 GOOS=windows GOAMD64=v2 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@.exe
-
-windows-amd64v1:
+windows-amd64-compatible:
 	GOARCH=amd64 GOOS=windows GOAMD64=v1 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@.exe
 
 windows-arm64:
@@ -160,3 +159,7 @@ lint:
 
 clean:
 	rm $(BINDIR)/*
+
+CLANG ?= clang-14
+CFLAGS := -O2 -g -Wall -Werror $(CFLAGS)
+

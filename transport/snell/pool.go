@@ -5,9 +5,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/Dreamacro/clash/component/pool"
-
-	"github.com/Dreamacro/go-shadowsocks2/shadowaead"
+	"github.com/metacubex/mihomo/component/pool"
+	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
 )
 
 type Pool struct {
@@ -62,7 +61,7 @@ func (pc *PoolConn) Write(b []byte) (int, error) {
 }
 
 func (pc *PoolConn) Close() error {
-	// clash use SetReadDeadline to break bidirectional copy between client and server.
+	// mihomo use SetReadDeadline to break bidirectional copy between client and server.
 	// reset it before reuse connection to avoid io timeout error.
 	_ = pc.Snell.Conn.SetReadDeadline(time.Time{})
 	pc.pool.Put(pc.Snell)

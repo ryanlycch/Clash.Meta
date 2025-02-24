@@ -3,9 +3,12 @@ package sniffer
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"strings"
 
-	C "github.com/Dreamacro/clash/constant"
+	"github.com/metacubex/mihomo/common/utils"
+	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/constant/sniffer"
 )
 
 var (
@@ -13,7 +16,33 @@ var (
 	errNotClientHello = errors.New("not client hello")
 )
 
+type errNeedAtLeastData struct {
+	length int
+	err    error
+}
+
+func (e *errNeedAtLeastData) Error() string {
+	return fmt.Sprintf("%v, need at least length: %d", e.err, e.length)
+}
+
+func (e *errNeedAtLeastData) Unwrap() error {
+	return e.err
+}
+
+var _ sniffer.Sniffer = (*TLSSniffer)(nil)
+
 type TLSSniffer struct {
+	*BaseSniffer
+}
+
+func NewTLSSniffer(snifferConfig SnifferConfig) (*TLSSniffer, error) {
+	ports := snifferConfig.Ports
+	if len(ports) == 0 {
+		ports = utils.IntRanges[uint16]{utils.NewRange[uint16](443, 443)}
+	}
+	return &TLSSniffer{
+		BaseSniffer: NewBaseSniffer(ports, C.TCP),
+	}, nil
 }
 
 func (tls *TLSSniffer) Protocol() string {
@@ -24,7 +53,7 @@ func (tls *TLSSniffer) SupportNetwork() C.NetWork {
 	return C.TCP
 }
 
-func (tls *TLSSniffer) SniffTCP(bytes []byte) (string, error) {
+func (tls *TLSSniffer) SniffData(bytes []byte) (string, error) {
 	domain, err := SniffTLS(bytes)
 	if err == nil {
 		return *domain, nil
@@ -145,7 +174,10 @@ func SniffTLS(b []byte) (*string, error) {
 	}
 	headerLen := int(binary.BigEndian.Uint16(b[3:5]))
 	if 5+headerLen > len(b) {
-		return nil, ErrNoClue
+		return nil, &errNeedAtLeastData{
+			length: 5 + headerLen,
+			err:    ErrNoClue,
+		}
 	}
 
 	domain, err := ReadClientHello(b[5 : 5+headerLen])

@@ -1,112 +1,253 @@
 package outboundgroup
 
 import (
-	"github.com/Dreamacro/clash/adapter/outbound"
-	C "github.com/Dreamacro/clash/constant"
-	"github.com/Dreamacro/clash/constant/provider"
-	types "github.com/Dreamacro/clash/constant/provider"
-	"github.com/Dreamacro/clash/log"
-	"github.com/Dreamacro/clash/tunnel"
-	"github.com/dlclark/regexp2"
-	"go.uber.org/atomic"
+	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/metacubex/mihomo/adapter/outbound"
+	"github.com/metacubex/mihomo/common/atomic"
+	"github.com/metacubex/mihomo/common/utils"
+	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/constant/provider"
+	types "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/tunnel"
+
+	"github.com/dlclark/regexp2"
 )
 
 type GroupBase struct {
 	*outbound.Base
-	filter        *regexp2.Regexp
-	providers     []provider.ProxyProvider
-	versions      sync.Map // map[string]uint
-	proxies       sync.Map // map[string][]C.Proxy
-	failedTestMux sync.Mutex
-	failedTimes   int
-	failedTime    time.Time
-	failedTesting *atomic.Bool
+	filterRegs       []*regexp2.Regexp
+	excludeFilterReg *regexp2.Regexp
+	excludeTypeArray []string
+	providers        []provider.ProxyProvider
+	failedTestMux    sync.Mutex
+	failedTimes      int
+	failedTime       time.Time
+	failedTesting    atomic.Bool
+	proxies          [][]C.Proxy
+	versions         []atomic.Uint32
+	TestTimeout      int
+	maxFailedTimes   int
 }
 
 type GroupBaseOption struct {
 	outbound.BaseOption
-	filter    string
-	providers []provider.ProxyProvider
+	filter         string
+	excludeFilter  string
+	excludeType    string
+	TestTimeout    int
+	maxFailedTimes int
+	providers      []provider.ProxyProvider
 }
 
 func NewGroupBase(opt GroupBaseOption) *GroupBase {
-	var filter *regexp2.Regexp = nil
-	if opt.filter != "" {
-		filter = regexp2.MustCompile(opt.filter, 0)
+	if opt.RoutingMark != 0 {
+		log.Warnln("The group [%s] with routing-mark configuration is deprecated, please set it directly on the proxy instead", opt.Name)
 	}
-	return &GroupBase{
-		Base:          outbound.NewBase(opt.BaseOption),
-		filter:        filter,
-		providers:     opt.providers,
-		failedTesting: atomic.NewBool(false),
+	if opt.Interface != "" {
+		log.Warnln("The group [%s] with interface-name configuration is deprecated, please set it directly on the proxy instead", opt.Name)
+	}
+
+	var excludeFilterReg *regexp2.Regexp
+	if opt.excludeFilter != "" {
+		excludeFilterReg = regexp2.MustCompile(opt.excludeFilter, regexp2.None)
+	}
+	var excludeTypeArray []string
+	if opt.excludeType != "" {
+		excludeTypeArray = strings.Split(opt.excludeType, "|")
+	}
+
+	var filterRegs []*regexp2.Regexp
+	if opt.filter != "" {
+		for _, filter := range strings.Split(opt.filter, "`") {
+			filterReg := regexp2.MustCompile(filter, regexp2.None)
+			filterRegs = append(filterRegs, filterReg)
+		}
+	}
+
+	gb := &GroupBase{
+		Base:             outbound.NewBase(opt.BaseOption),
+		filterRegs:       filterRegs,
+		excludeFilterReg: excludeFilterReg,
+		excludeTypeArray: excludeTypeArray,
+		providers:        opt.providers,
+		failedTesting:    atomic.NewBool(false),
+		TestTimeout:      opt.TestTimeout,
+		maxFailedTimes:   opt.maxFailedTimes,
+	}
+
+	if gb.TestTimeout == 0 {
+		gb.TestTimeout = 5000
+	}
+	if gb.maxFailedTimes == 0 {
+		gb.maxFailedTimes = 5
+	}
+
+	gb.proxies = make([][]C.Proxy, len(opt.providers))
+	gb.versions = make([]atomic.Uint32, len(opt.providers))
+
+	return gb
+}
+
+func (gb *GroupBase) Touch() {
+	for _, pd := range gb.providers {
+		pd.Touch()
 	}
 }
 
 func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
-	if gb.filter == nil {
-		var proxies []C.Proxy
+	var proxies []C.Proxy
+	if len(gb.filterRegs) == 0 {
 		for _, pd := range gb.providers {
 			if touch {
-				proxies = append(proxies, pd.ProxiesWithTouch()...)
-			} else {
-				proxies = append(proxies, pd.Proxies()...)
+				pd.Touch()
+			}
+			proxies = append(proxies, pd.Proxies()...)
+		}
+	} else {
+		for i, pd := range gb.providers {
+			if touch {
+				pd.Touch()
+			}
+
+			if pd.VehicleType() == types.Compatible {
+				gb.versions[i].Store(pd.Version())
+				gb.proxies[i] = pd.Proxies()
+				continue
+			}
+
+			version := gb.versions[i].Load()
+			if version != pd.Version() && gb.versions[i].CompareAndSwap(version, pd.Version()) {
+				var (
+					proxies    []C.Proxy
+					newProxies []C.Proxy
+				)
+
+				proxies = pd.Proxies()
+				proxiesSet := map[string]struct{}{}
+				for _, filterReg := range gb.filterRegs {
+					for _, p := range proxies {
+						name := p.Name()
+						if mat, _ := filterReg.MatchString(name); mat {
+							if _, ok := proxiesSet[name]; !ok {
+								proxiesSet[name] = struct{}{}
+								newProxies = append(newProxies, p)
+							}
+						}
+					}
+				}
+
+				gb.proxies[i] = newProxies
 			}
 		}
-		if len(proxies) == 0 {
-			return append(proxies, tunnel.Proxies()["COMPATIBLE"])
+
+		for _, p := range gb.proxies {
+			proxies = append(proxies, p...)
 		}
-		return proxies
 	}
 
-	for _, pd := range gb.providers {
-		if pd.VehicleType() == types.Compatible {
-			if touch {
-				gb.proxies.Store(pd.Name(), pd.ProxiesWithTouch())
-			} else {
-				gb.proxies.Store(pd.Name(), pd.Proxies())
-			}
-
-			gb.versions.Store(pd.Name(), pd.Version())
-			continue
-		}
-
-		if version, ok := gb.versions.Load(pd.Name()); !ok || version != pd.Version() {
-			var (
-				proxies    []C.Proxy
-				newProxies []C.Proxy
-			)
-
-			if touch {
-				proxies = pd.ProxiesWithTouch()
-			} else {
-				proxies = pd.Proxies()
-			}
-
+	if len(gb.providers) > 1 && len(gb.filterRegs) > 1 {
+		var newProxies []C.Proxy
+		proxiesSet := map[string]struct{}{}
+		for _, filterReg := range gb.filterRegs {
 			for _, p := range proxies {
-				if mat, _ := gb.filter.FindStringMatch(p.Name()); mat != nil {
-					newProxies = append(newProxies, p)
+				name := p.Name()
+				if mat, _ := filterReg.MatchString(name); mat {
+					if _, ok := proxiesSet[name]; !ok {
+						proxiesSet[name] = struct{}{}
+						newProxies = append(newProxies, p)
+					}
 				}
 			}
-
-			gb.proxies.Store(pd.Name(), newProxies)
-			gb.versions.Store(pd.Name(), pd.Version())
 		}
+		for _, p := range proxies { // add not matched proxies at the end
+			name := p.Name()
+			if _, ok := proxiesSet[name]; !ok {
+				proxiesSet[name] = struct{}{}
+				newProxies = append(newProxies, p)
+			}
+		}
+		proxies = newProxies
 	}
-	var proxies []C.Proxy
-	gb.proxies.Range(func(key, value any) bool {
-		proxies = append(proxies, value.([]C.Proxy)...)
-		return true
-	})
+	if gb.excludeTypeArray != nil {
+		var newProxies []C.Proxy
+		for _, p := range proxies {
+			mType := p.Type().String()
+			flag := false
+			for i := range gb.excludeTypeArray {
+				if strings.EqualFold(mType, gb.excludeTypeArray[i]) {
+					flag = true
+					break
+				}
+
+			}
+			if flag {
+				continue
+			}
+			newProxies = append(newProxies, p)
+		}
+		proxies = newProxies
+	}
+
+	if gb.excludeFilterReg != nil {
+		var newProxies []C.Proxy
+		for _, p := range proxies {
+			name := p.Name()
+			if mat, _ := gb.excludeFilterReg.MatchString(name); mat {
+				continue
+			}
+			newProxies = append(newProxies, p)
+		}
+		proxies = newProxies
+	}
+
 	if len(proxies) == 0 {
 		return append(proxies, tunnel.Proxies()["COMPATIBLE"])
 	}
+
 	return proxies
 }
 
-func (gb *GroupBase) onDialFailed() {
-	if gb.failedTesting.Load() {
+func (gb *GroupBase) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (map[string]uint16, error) {
+	var wg sync.WaitGroup
+	var lock sync.Mutex
+	mp := map[string]uint16{}
+	proxies := gb.GetProxies(false)
+	for _, proxy := range proxies {
+		proxy := proxy
+		wg.Add(1)
+		go func() {
+			delay, err := proxy.URLTest(ctx, url, expectedStatus)
+			if err == nil {
+				lock.Lock()
+				mp[proxy.Name()] = delay
+				lock.Unlock()
+			}
+
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+
+	if len(mp) == 0 {
+		return mp, fmt.Errorf("get delay: all proxies timeout")
+	} else {
+		return mp, nil
+	}
+}
+
+func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error) {
+	if adapterType == C.Direct || adapterType == C.Compatible || adapterType == C.Reject || adapterType == C.Pass || adapterType == C.RejectDrop {
+		return
+	}
+
+	if strings.Contains(err.Error(), "connection refused") {
+		go gb.healthCheck()
 		return
 	}
 
@@ -116,49 +257,46 @@ func (gb *GroupBase) onDialFailed() {
 
 		gb.failedTimes++
 		if gb.failedTimes == 1 {
-			log.Warnln("ProxyGroup: %s first failed", gb.Name())
+			log.Debugln("ProxyGroup: %s first failed", gb.Name())
 			gb.failedTime = time.Now()
 		} else {
-			if time.Since(gb.failedTime) > gb.failedTimeoutInterval() {
+			if time.Since(gb.failedTime) > time.Duration(gb.TestTimeout)*time.Millisecond {
+				gb.failedTimes = 0
 				return
 			}
 
-			log.Warnln("ProxyGroup: %s failed count: %d", gb.Name(), gb.failedTimes)
-			if gb.failedTimes >= gb.maxFailedTimes() {
-				gb.failedTesting.Store(true)
+			log.Debugln("ProxyGroup: %s failed count: %d", gb.Name(), gb.failedTimes)
+			if gb.failedTimes >= gb.maxFailedTimes {
 				log.Warnln("because %s failed multiple times, active health check", gb.Name())
-				wg := sync.WaitGroup{}
-				for _, proxyProvider := range gb.providers {
-					wg.Add(1)
-					proxyProvider := proxyProvider
-					go func() {
-						defer wg.Done()
-						proxyProvider.HealthCheck()
-					}()
-				}
-
-				wg.Wait()
-				gb.failedTesting.Store(false)
-				gb.failedTimes = 0
+				gb.healthCheck()
 			}
 		}
 	}()
 }
 
-func (gb *GroupBase) failedIntervalTime() int64 {
-	return 5 * time.Second.Milliseconds()
+func (gb *GroupBase) healthCheck() {
+	if gb.failedTesting.Load() {
+		return
+	}
+
+	gb.failedTesting.Store(true)
+	wg := sync.WaitGroup{}
+	for _, proxyProvider := range gb.providers {
+		wg.Add(1)
+		proxyProvider := proxyProvider
+		go func() {
+			defer wg.Done()
+			proxyProvider.HealthCheck()
+		}()
+	}
+
+	wg.Wait()
+	gb.failedTesting.Store(false)
+	gb.failedTimes = 0
 }
 
 func (gb *GroupBase) onDialSuccess() {
 	if !gb.failedTesting.Load() {
 		gb.failedTimes = 0
 	}
-}
-
-func (gb *GroupBase) maxFailedTimes() int {
-	return 5
-}
-
-func (gb *GroupBase) failedTimeoutInterval() time.Duration {
-	return 5 * time.Second
 }

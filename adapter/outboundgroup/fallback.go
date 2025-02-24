@@ -4,16 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/Dreamacro/clash/adapter/outbound"
-	"github.com/Dreamacro/clash/component/dialer"
-	C "github.com/Dreamacro/clash/constant"
-	"github.com/Dreamacro/clash/constant/provider"
+	"time"
+
+	"github.com/metacubex/mihomo/adapter/outbound"
+	"github.com/metacubex/mihomo/common/callback"
+	N "github.com/metacubex/mihomo/common/net"
+	"github.com/metacubex/mihomo/common/utils"
+	"github.com/metacubex/mihomo/component/dialer"
+	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/constant/provider"
 )
 
 type Fallback struct {
 	*GroupBase
-	disableUDP bool
-	selected   string
+	disableUDP     bool
+	testUrl        string
+	selected       string
+	expectedStatus string
+	Hidden         bool
+	Icon           string
 }
 
 func (f *Fallback) Now() string {
@@ -27,9 +36,18 @@ func (f *Fallback) DialContext(ctx context.Context, metadata *C.Metadata, opts .
 	c, err := proxy.DialContext(ctx, metadata, f.Base.DialOptions(opts...)...)
 	if err == nil {
 		c.AppendToChains(f)
-		f.onDialSuccess()
 	} else {
-		f.onDialFailed()
+		f.onDialFailed(proxy.Type(), err)
+	}
+
+	if N.NeedHandshake(c) {
+		c = callback.NewFirstWriteCallBackConn(c, func(err error) {
+			if err == nil {
+				f.onDialSuccess()
+			} else {
+				f.onDialFailed(proxy.Type(), err)
+			}
+		})
 	}
 
 	return c, err
@@ -56,6 +74,11 @@ func (f *Fallback) SupportUDP() bool {
 	return proxy.SupportUDP()
 }
 
+// IsL3Protocol implements C.ProxyAdapter
+func (f *Fallback) IsL3Protocol(metadata *C.Metadata) bool {
+	return f.findAliveProxy(false).IsL3Protocol(metadata)
+}
+
 // MarshalJSON implements C.ProxyAdapter
 func (f *Fallback) MarshalJSON() ([]byte, error) {
 	all := []string{}
@@ -63,42 +86,70 @@ func (f *Fallback) MarshalJSON() ([]byte, error) {
 		all = append(all, proxy.Name())
 	}
 	return json.Marshal(map[string]any{
-		"type": f.Type().String(),
-		"now":  f.Now(),
-		"all":  all,
+		"type":           f.Type().String(),
+		"now":            f.Now(),
+		"all":            all,
+		"testUrl":        f.testUrl,
+		"expectedStatus": f.expectedStatus,
+		"fixed":          f.selected,
+		"hidden":         f.Hidden,
+		"icon":           f.Icon,
 	})
 }
 
 // Unwrap implements C.ProxyAdapter
-func (f *Fallback) Unwrap(metadata *C.Metadata) C.Proxy {
-	proxy := f.findAliveProxy(true)
+func (f *Fallback) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
+	proxy := f.findAliveProxy(touch)
 	return proxy
 }
 
 func (f *Fallback) findAliveProxy(touch bool) C.Proxy {
 	proxies := f.GetProxies(touch)
-	al := proxies[0]
-	for i := len(proxies) - 1; i > -1; i-- {
-		proxy := proxies[i]
-		if proxy.Name() == f.selected && proxy.Alive() {
-			return proxy
-		}
-		if proxy.Alive() {
-			al = proxy
+	for _, proxy := range proxies {
+		if len(f.selected) == 0 {
+			if proxy.AliveForTestUrl(f.testUrl) {
+				return proxy
+			}
+		} else {
+			if proxy.Name() == f.selected {
+				if proxy.AliveForTestUrl(f.testUrl) {
+					return proxy
+				} else {
+					f.selected = ""
+				}
+			}
 		}
 	}
-	return al
+
+	return proxies[0]
 }
 
 func (f *Fallback) Set(name string) error {
+	var p C.Proxy
 	for _, proxy := range f.GetProxies(false) {
 		if proxy.Name() == name {
-			f.selected = name
-			return nil
+			p = proxy
+			break
 		}
 	}
 
-	return errors.New("proxy not exist")
+	if p == nil {
+		return errors.New("proxy not exist")
+	}
+
+	f.selected = name
+	if !p.AliveForTestUrl(f.testUrl) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(5000))
+		defer cancel()
+		expectedStatus, _ := utils.NewUnsignedRanges[uint16](f.expectedStatus)
+		_, _ = p.URLTest(ctx, f.testUrl, expectedStatus)
+	}
+
+	return nil
+}
+
+func (f *Fallback) ForceSet(name string) {
+	f.selected = name
 }
 
 func NewFallback(option *GroupCommonOption, providers []provider.ProxyProvider) *Fallback {
@@ -111,8 +162,16 @@ func NewFallback(option *GroupCommonOption, providers []provider.ProxyProvider) 
 				RoutingMark: option.RoutingMark,
 			},
 			option.Filter,
+			option.ExcludeFilter,
+			option.ExcludeType,
+			option.TestTimeout,
+			option.MaxFailedTimes,
 			providers,
 		}),
-		disableUDP: option.DisableUDP,
+		disableUDP:     option.DisableUDP,
+		testUrl:        option.URL,
+		expectedStatus: option.ExpectedStatus,
+		Hidden:         option.Hidden,
+		Icon:           option.Icon,
 	}
 }

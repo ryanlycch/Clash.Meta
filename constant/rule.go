@@ -5,18 +5,31 @@ const (
 	Domain RuleType = iota
 	DomainSuffix
 	DomainKeyword
+	DomainRegex
 	GEOSITE
 	GEOIP
+	SrcGEOIP
+	IPASN
+	SrcIPASN
 	IPCIDR
 	SrcIPCIDR
+	IPSuffix
+	SrcIPSuffix
 	SrcPort
 	DstPort
-	Process
+	InPort
+	DSCP
+	InUser
+	InName
+	InType
+	ProcessName
 	ProcessPath
+	ProcessNameRegex
+	ProcessPathRegex
 	RuleSet
 	Network
 	Uid
-	INTYPE
+	SubRules
 	MATCH
 	AND
 	OR
@@ -33,32 +46,58 @@ func (rt RuleType) String() string {
 		return "DomainSuffix"
 	case DomainKeyword:
 		return "DomainKeyword"
+	case DomainRegex:
+		return "DomainRegex"
 	case GEOSITE:
 		return "GeoSite"
 	case GEOIP:
 		return "GeoIP"
+	case SrcGEOIP:
+		return "SrcGeoIP"
+	case IPASN:
+		return "IPASN"
+	case SrcIPASN:
+		return "SrcIPASN"
 	case IPCIDR:
 		return "IPCIDR"
 	case SrcIPCIDR:
 		return "SrcIPCIDR"
+	case IPSuffix:
+		return "IPSuffix"
+	case SrcIPSuffix:
+		return "SrcIPSuffix"
 	case SrcPort:
 		return "SrcPort"
 	case DstPort:
 		return "DstPort"
-	case Process:
-		return "Process"
+	case InPort:
+		return "InPort"
+	case InUser:
+		return "InUser"
+	case InName:
+		return "InName"
+	case InType:
+		return "InType"
+	case ProcessName:
+		return "ProcessName"
 	case ProcessPath:
 		return "ProcessPath"
+	case ProcessNameRegex:
+		return "ProcessNameRegex"
+	case ProcessPathRegex:
+		return "ProcessPathRegex"
 	case MATCH:
 		return "Match"
 	case RuleSet:
 		return "RuleSet"
 	case Network:
 		return "Network"
+	case DSCP:
+		return "DSCP"
 	case Uid:
 		return "Uid"
-	case INTYPE:
-		return "InType"
+	case SubRules:
+		return "SubRules"
 	case AND:
 		return "AND"
 	case OR:
@@ -72,11 +111,15 @@ func (rt RuleType) String() string {
 
 type Rule interface {
 	RuleType() RuleType
-	Match(metadata *Metadata) bool
+	Match(metadata *Metadata) (bool, string)
 	Adapter() string
 	Payload() string
 	ShouldResolveIP() bool
 	ShouldFindProcess() bool
-	RuleExtra() *RuleExtra
-	SetRuleExtra(re *RuleExtra)
+	ProviderNames() []string
+}
+
+type RuleGroup interface {
+	Rule
+	GetRecodeSize() int
 }
